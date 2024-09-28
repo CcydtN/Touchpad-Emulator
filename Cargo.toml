@@ -1,0 +1,9 @@
+[package]
+name = "learn_usb_protocal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7.7"
+tokio = "1.40.0"
+usbip = "0.7.1"
