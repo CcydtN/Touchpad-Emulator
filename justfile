@@ -20,4 +20,7 @@ attach:
 detach:
     sudo usbip detach -p 00
 
+send_key char:
+    curl http://0.0.0.0:3000/send?key={{char}}
+
 

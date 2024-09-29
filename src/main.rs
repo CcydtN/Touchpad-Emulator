@@ -1,12 +1,21 @@
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    routing::get,
+    Router,
+};
 use log::*;
+use serde::Deserialize;
 use std::net::*;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio;
+use tracing_subscriber;
+use usbip::UsbInterfaceHandler;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
+
     let handler = Arc::new(Mutex::new(
         Box::new(usbip::hid::UsbHidKeyboardHandler::new_keyboard())
             as Box<dyn usbip::UsbInterfaceHandler + Send>,
@@ -29,22 +38,39 @@ async fn main() {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 2024);
     tokio::spawn(usbip::server(addr, server));
 
-    let mut count = 0;
-    loop {
-        tokio::time::sleep(Duration::new(1, 0)).await;
-        let mut handler = handler.lock().unwrap();
-        if let Some(hid) = handler
-            .as_any()
-            .downcast_mut::<usbip::hid::UsbHidKeyboardHandler>()
-        {
-            // hid.pending_key_events
-            //     .push_back(usbip::hid::UsbHidKeyboardReport::from_ascii(b'1'));
-            // info!("Simulate a key event");
-        }
-        // count += 1;
-        // info!("{:?}", count);
-        // if !(count < 5) {
-        // break;
-        // }
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/send", get(key))
+        .with_state(handler);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    key: char,
+}
+
+async fn root() -> StatusCode {
+    StatusCode::OK
+}
+
+#[axum::debug_handler]
+async fn key(
+    Query(params): Query<Params>,
+    State(handler): State<Arc<Mutex<Box<dyn UsbInterfaceHandler + Send>>>>,
+) -> StatusCode {
+    info!("{params:?}");
+    let mut handler = handler.lock().unwrap();
+    if let Some(hid) = handler
+        .as_any()
+        .downcast_mut::<usbip::hid::UsbHidKeyboardHandler>()
+    {
+        hid.pending_key_events
+            .push_back(usbip::hid::UsbHidKeyboardReport::from_ascii(
+                params.key.try_into().unwrap(),
+            ));
     }
+
+    StatusCode::OK
 }
