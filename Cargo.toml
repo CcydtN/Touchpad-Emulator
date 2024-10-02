@@ -16,3 +16,7 @@ usbip = "0.7.1"
 [[bin]]
 name = "keyboard"
 path = "src/keyboard.rs"
+
+[[bin]]
+name = "touchpad"
+path = "src/touchpad.rs"

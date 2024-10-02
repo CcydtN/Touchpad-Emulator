@@ -26,3 +26,6 @@ dev_keyboard:
 # Send char to the server
 send_key char:
     curl http://0.0.0.0:3000/send?key={{char}}
+
+dev_touchpad:
+    cargo run --bin touchpad
