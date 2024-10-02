@@ -12,3 +12,7 @@ serde_json = "1.0.128"
 tokio = { version = "1.40.0", features = ["full"] }
 tracing-subscriber = "0.3.18"
 usbip = "0.7.1"
+
+[[bin]]
+name = "keyboard"
+path = "src/keyboard.rs"

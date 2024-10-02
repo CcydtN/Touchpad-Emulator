@@ -4,10 +4,6 @@ export RUST_LOG:="info"
 # The default option when running `just`
 default:
     just --list
-        
-# Creating a usbip server, that provide a fake device.
-run:
-    cargo run
 
 # Attaching to the usbip server, created with the last command, and list the device.
 # Make sure the usbip service, and some kernel module is enable.
@@ -20,7 +16,13 @@ attach:
 detach:
     sudo usbip detach -p 00
 
+# Command for keyboard emulation
+
+# Creating a usbip server, that provide a fake device.
+# Use `just attach` to connect to the server
+dev_keyboard:
+    cargo run --bin keyboard
+
+# Send char to the server
 send_key char:
     curl http://0.0.0.0:3000/send?key={{char}}
-
-
