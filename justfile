@@ -1,5 +1,5 @@
 PORT:="2024"
-export RUST_LOG:="info"
+export RUST_LOG:="debug"
 
 # The default option when running `just`
 default:

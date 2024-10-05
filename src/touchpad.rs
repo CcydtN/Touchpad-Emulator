@@ -19,10 +19,11 @@ use usbip::UsbInterfaceHandler;
 use usbip::{hid::HidDescriptorType, Direction, EndpointAttributes};
 
 #[rustfmt::skip]
-// report from hid.git(linux) atmel_03eb_211c
+// Report descriptor from hid.git(linux) atmel_03eb_211c
+// Modify Usage from Touch Screen(0x04) to Touchpad(0x05)
 const REPORT_DESCRIPTOR:&[u8] = &[
 0x05, 0x0D,        // Usage Page (Digitizer)
-0x09, 0x04,        // Usage (Touch Screen)
+0x09, 0x05,        // Usage (Touchpad)
 0xA1, 0x01,        // Collection (Application)
 0x85, 0x01,        //   Report ID (1)
 0x09, 0x22,        //   Usage (Finger)
@@ -34,14 +35,8 @@ const REPORT_DESCRIPTOR:&[u8] = &[
 0x95, 0x01,        //     Report Count (1)
 0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
 
-0x09, 0x32,        //     Usage (In Range)
-0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
-
-0x09, 0x37,        //     Usage (Data Valid)
-0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
-
 0x25, 0x1F,        //     Logical Maximum (31, Contact Identifier)
-0x75, 0x05,        //     Report Size (5)
+0x75, 0x05,        //     Report Size (7)
 0x09, 0x51,        //     Usage (0x51)
 0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
 
@@ -70,6 +65,7 @@ const REPORT_DESCRIPTOR:&[u8] = &[
 0xC0,              // End Collection
 ];
 
+#[derive(Debug)]
 struct UsbHidTouchpadHandler {
     pub report_descriptor: Vec<u8>,
     pub max_contact_count: u8,
@@ -150,18 +146,20 @@ impl UsbInterfaceHandler for UsbHidTouchpadHandler {
                 let item = self.slot[self.next_idx.to_usize().unwrap()];
                 match item {
                     Some(x) => {
-                        buffer.push(self.next_idx.to_le() << 3 | 0b111);
+                        buffer.push(self.next_idx.to_le() << 1 | 0b1);
                         for &i in x.0.to_le_bytes().iter().chain(x.1.to_le_bytes().iter()) {
                             buffer.push(i);
                         }
                     }
                     None => {
-                        buffer.push(self.next_idx.to_le() << 3);
+                        buffer.push(self.next_idx.to_le() << 1);
                         for _ in 0..4 {
                             buffer.push(0);
                         }
                     }
                 }
+                self.next_idx += 1;
+                self.next_idx %= self.max_contact_count;
                 return Ok(buffer);
             }
         }
@@ -256,6 +254,7 @@ async fn touch_start(
             let _ = touchpad_handler.slot[idx].insert((touch.x, touch.y));
         }
     }
+    debug!("{touchpad_handler:?}");
     StatusCode::OK
 }
 
@@ -293,5 +292,6 @@ async fn touch_end(
         }
         touchpad_handler.map.remove(&touch.identifier);
     }
+    debug!("{touchpad_handler:?}");
     StatusCode::OK
 }
