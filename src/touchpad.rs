@@ -221,7 +221,7 @@ async fn main() {
         .route("/touchstart", post(touch_start))
         .route("/touchmove", post(touch_move))
         .route("/touchend", post(touch_end))
-        .route("/touchcancel", post(touch_cancel))
+        .route("/touchcancel", post(touch_end))
         .with_state(shared_obj);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -279,25 +279,6 @@ async fn touch_move(
 
 #[axum::debug_handler]
 async fn touch_end(
-    State(usb_interface): State<UsbInterface>,
-    extract::Json(payload): extract::Json<Payload>,
-) -> StatusCode {
-    let mut handler = usb_interface.lock().unwrap();
-    let touchpad_handler = handler
-        .as_any()
-        .downcast_mut::<UsbHidTouchpadHandler>()
-        .unwrap();
-    for touch in payload.touches {
-        if let Some(&idx) = touchpad_handler.map.get(&touch.identifier) {
-            let _ = touchpad_handler.slot[idx].take();
-        }
-        touchpad_handler.map.remove(&touch.identifier);
-    }
-    StatusCode::OK
-}
-
-#[axum::debug_handler]
-async fn touch_cancel(
     State(usb_interface): State<UsbInterface>,
     extract::Json(payload): extract::Json<Payload>,
 ) -> StatusCode {
