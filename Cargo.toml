@@ -12,6 +12,7 @@ num = "0.4.3"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.128"
 tokio = { version = "1.40.0", features = ["full"] }
+tower-http = { version = "0.6.1", features = ["fs"] }
 tracing-subscriber = "0.3.18"
 usbip = "0.7.1"
 

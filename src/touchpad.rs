@@ -1,65 +1,92 @@
 use axum::{
-    extract::{Query, State},
+    extract::{self, State},
     http::StatusCode,
-    routing::get,
+    routing::post,
     Router,
 };
 use log::*;
-use num::FromPrimitive;
+use num::{traits::ToBytes, FromPrimitive, ToPrimitive};
 use serde::Deserialize;
-use std::net::*;
-use std::sync::{Arc, Mutex};
+use std::{collections::HashMap, net::*};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 use tokio;
+use tower_http::services::ServeDir;
 use tracing_subscriber;
 use usbip::UsbInterfaceHandler;
 use usbip::{hid::HidDescriptorType, Direction, EndpointAttributes};
 
 #[rustfmt::skip]
+// report from hid.git(linux) atmel_03eb_211c
 const REPORT_DESCRIPTOR:&[u8] = &[
-    //TOUCH PAD input TLC
-    0x05, 0x0d,                         // USAGE_PAGE (Digitizers)
-    0x09, 0x05,                         // USAGE (Touch Pad)
-    0xa1, 0x01,                         // COLLECTION (Application)
-    0x09, 0x22,                         // USAGE (FINGER)
-    0xa1, 0x02,                         // COLLECTION (Logical)
-    0x15, 0x00,                         //       LOGICAL_MINIMUM (0)
-    0x25, 0x01,                         //       LOGICAL_MAXIMUM (1)
-    0x09, 0x47,                         //       USAGE (Confidence)
-    0x09, 0x42,                         //       USAGE (Tip switch)
-    0x95, 0x02,                         //       REPORT_COUNT (2)
-    0x75, 0x01,                         //       REPORT_SIZE (1)
-    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
-    // Padding, size 1 bit, count 6
-    0x95, 0x06,                         //       REPORT_COUNT (6)
-    0x81, 0x03,                         //       INPUT (Cnst,Var,Abs)
-    // X, Y
-    0x05, 0x01,                         //       USAGE_PAGE (Generic Desk..
-    0x15, 0x00,                         //       LOGICAL_MINIMUM (0)
-    0x26, 0xff, 0x0f,                   //       LOGICAL_MAXIMUM (4095)
-    0x75, 0x10,                         //       REPORT_SIZE (16)
-    0x55, 0x0e,                         //       UNIT_EXPONENT (-2)
-    0x65, 0x13,                         //       UNIT(Inch,EngLinear)
-    0x09, 0x30,                         //       USAGE (X)
-    0x35, 0x00,                         //       PHYSICAL_MINIMUM (0)
-    0x46, 0x90, 0x01,                   //       PHYSICAL_MAXIMUM (400)
-    0x95, 0x01,                         //       REPORT_COUNT (1)
-    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
-    0x46, 0x13, 0x01,                   //       PHYSICAL_MAXIMUM (275)
-    0x09, 0x31,                         //       USAGE (Y)
-    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
+0x05, 0x0D,        // Usage Page (Digitizer)
+0x09, 0x04,        // Usage (Touch Screen)
+0xA1, 0x01,        // Collection (Application)
+0x85, 0x01,        //   Report ID (1)
+0x09, 0x22,        //   Usage (Finger)
+0xA1, 0x00,        //   Collection (Physical)
+0x09, 0x42,        //     Usage (Tip Switch)
+0x15, 0x00,        //     Logical Minimum (0)
+0x25, 0x01,        //     Logical Maximum (1)
+0x75, 0x01,        //     Report Size (1)
+0x95, 0x01,        //     Report Count (1)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
 
-    0xc0,                               // END_COLLECTION
-    0xc0,                               // END_COLLECTION
+0x09, 0x32,        //     Usage (In Range)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+
+0x09, 0x37,        //     Usage (Data Valid)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+
+0x25, 0x1F,        //     Logical Maximum (31, Contact Identifier)
+0x75, 0x05,        //     Report Size (5)
+0x09, 0x51,        //     Usage (0x51)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+
+0x05, 0x01,        //     Usage Page (Generic Desktop Ctrls)
+0x55, 0x0E,        //     Unit Exponent (-2)
+0x65, 0x11,        //     Unit (System: SI Linear, Length: Centimeter)
+0x35, 0x00,        //     Physical Minimum (0)
+0x75, 0x10,        //     Report Size (16)
+0x46, 0x58, 0x02,  //     Physical Maximum (600)
+0x26, 0xFF, 0x0F,  //     Logical Maximum (4095)
+0x09, 0x30,        //     Usage (X)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+
+0x46, 0x58, 0x02,  //     Physical Maximum (600)
+0x26, 0xFF, 0x0F,  //     Logical Maximum (4095)
+0x09, 0x31,        //     Usage (Y)
+0x81, 0x02,        //     Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+
+0x05, 0x0D,        //     Usage Page (Digitizer)
+0x75, 0x08,        //     Report Size (8)
+0x85, 0x02,        //     Report ID (2)
+0x09, 0x55,        //     Usage (0x55)
+0x25, 0x10,        //     Logical Maximum (16)
+0xB1, 0x02,        //     Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+0xC0,              //   End Collection
+0xC0,              // End Collection
 ];
 
 struct UsbHidTouchpadHandler {
     pub report_descriptor: Vec<u8>,
+    pub max_contact_count: u8,
+    pub next_idx: u8,
+    pub slot: Vec<Option<(u16, u16)>>,
+    pub map: HashMap<i64, usize>,
 }
 
 impl UsbHidTouchpadHandler {
     fn new() -> Self {
+        let max_contact_count = 4;
         Self {
             report_descriptor: REPORT_DESCRIPTOR.to_vec(),
+            max_contact_count,
+            next_idx: 0,
+            slot: vec![None; max_contact_count.to_usize().unwrap()],
+            map: HashMap::new(),
         }
     }
 }
@@ -104,29 +131,38 @@ impl UsbInterfaceHandler for UsbHidTouchpadHandler {
                     // SET_IDLE
                     return Ok(vec![]);
                 }
+                (0b0010100001, 0x01) => {
+                    // GET_REPORT,
+                    match FromPrimitive::from_u16(setup.value >> 8) {
+                        Some(0x03) => {
+                            // FEATURE REPORT
+                            return Ok(vec![0x02, self.max_contact_count]);
+                        }
+                        _ => unimplemented!("hid descriptor {:?}", setup),
+                    }
+                }
                 _ => unimplemented!("hid request {:?}", setup),
             }
         } else {
             // interrupt transfer
             if let Direction::In = ep.direction() {
-                // interrupt in
-                // match self.state {
-                //     UsbHidKeyboardHandlerState::Idle => {
-                //         if let Some(report) = self.pending_key_events.pop_front() {
-                //             let mut resp = vec![report.modifier, 0];
-                //             resp.extend_from_slice(&report.keys);
-                //             info!("HID key down");
-                //             self.state = UsbHidKeyboardHandlerState::KeyDown;
-                //             return Ok(resp);
-                //         }
-                //     }
-                //     UsbHidKeyboardHandlerState::KeyDown => {
-                //         let resp = vec![0; 6];
-                //         info!("HID key up");
-                //         self.state = UsbHidKeyboardHandlerState::Idle;
-                //         return Ok(resp);
-                //     }
-                // }
+                let mut buffer = vec![0x01];
+                let item = self.slot[self.next_idx.to_usize().unwrap()];
+                match item {
+                    Some(x) => {
+                        buffer.push(self.next_idx.to_le() << 3 | 0b111);
+                        for &i in x.0.to_le_bytes().iter().chain(x.1.to_le_bytes().iter()) {
+                            buffer.push(i);
+                        }
+                    }
+                    None => {
+                        buffer.push(self.next_idx.to_le() << 3);
+                        for _ in 0..4 {
+                            buffer.push(0);
+                        }
+                    }
+                }
+                return Ok(buffer);
             }
         }
         Ok(vec![])
@@ -137,12 +173,26 @@ impl UsbInterfaceHandler for UsbHidTouchpadHandler {
     }
 }
 
+#[derive(Clone)]
+struct UsbInterface {
+    usb_interface: Arc<Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>,
+}
+
+impl Deref for UsbInterface {
+    type Target = Arc<Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.usb_interface
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let handler: Arc<Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>> =
-        Arc::new(Mutex::new(Box::new(UsbHidTouchpadHandler::new())));
+    let shared_obj = UsbInterface {
+        usb_interface: Arc::new(Mutex::new(Box::new(UsbHidTouchpadHandler::new()))),
+    };
 
     let server = Arc::new(usbip::UsbIpServer::new_simulated(vec![
         usbip::UsbDevice::new(0).with_interface(
@@ -156,7 +206,7 @@ async fn main() {
                 max_packet_size: 0x08, // 8 bytes
                 interval: 0xA,
             }],
-            handler.clone(),
+            shared_obj.usb_interface.clone(),
         ),
     ]));
 
@@ -164,38 +214,103 @@ async fn main() {
     tokio::spawn(usbip::server(addr, server));
 
     let app = Router::new()
-        .route("/", get(root))
-        .route("/send", get(key))
-        .with_state(handler);
+        .nest_service(
+            "/",
+            ServeDir::new("assets").append_index_html_on_directories(true),
+        )
+        .route("/touchstart", post(touch_start))
+        .route("/touchmove", post(touch_move))
+        .route("/touchend", post(touch_end))
+        .route("/touchcancel", post(touch_cancel))
+        .with_state(shared_obj);
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
 #[derive(Debug, Deserialize)]
-struct Params {
-    key: char,
+struct Touch {
+    identifier: i64,
+    x: u16,
+    y: u16,
 }
 
-async fn root() -> StatusCode {
+#[derive(Debug, Deserialize)]
+struct Payload {
+    touches: Vec<Touch>,
+}
+
+#[axum::debug_handler]
+async fn touch_start(
+    State(usb_interface): State<UsbInterface>,
+    extract::Json(payload): extract::Json<Payload>,
+) -> StatusCode {
+    let mut handler = usb_interface.lock().unwrap();
+    let touchpad_handler = handler
+        .as_any()
+        .downcast_mut::<UsbHidTouchpadHandler>()
+        .unwrap();
+    for touch in payload.touches {
+        if let Some(idx) = touchpad_handler.slot.iter().position(|x| x.is_none()) {
+            touchpad_handler.map.insert(touch.identifier, idx);
+            let _ = touchpad_handler.slot[idx].insert((touch.x, touch.y));
+        }
+    }
     StatusCode::OK
 }
 
 #[axum::debug_handler]
-async fn key(
-    Query(params): Query<Params>,
-    State(handler): State<Arc<Mutex<Box<dyn UsbInterfaceHandler + Send>>>>,
+async fn touch_move(
+    State(usb_interface): State<UsbInterface>,
+    extract::Json(payload): extract::Json<Payload>,
 ) -> StatusCode {
-    info!("{params:?}");
-    let mut handler = handler.lock().unwrap();
-    if let Some(hid) = handler
+    let mut handler = usb_interface.lock().unwrap();
+    let touchpad_handler = handler
         .as_any()
-        .downcast_mut::<usbip::hid::UsbHidKeyboardHandler>()
-    {
-        hid.pending_key_events
-            .push_back(usbip::hid::UsbHidKeyboardReport::from_ascii(
-                params.key.try_into().unwrap(),
-            ));
+        .downcast_mut::<UsbHidTouchpadHandler>()
+        .unwrap();
+    for touch in payload.touches {
+        if let Some(&idx) = touchpad_handler.map.get(&touch.identifier) {
+            let _ = touchpad_handler.slot[idx].insert((touch.x, touch.y));
+        }
     }
+    StatusCode::OK
+}
 
+#[axum::debug_handler]
+async fn touch_end(
+    State(usb_interface): State<UsbInterface>,
+    extract::Json(payload): extract::Json<Payload>,
+) -> StatusCode {
+    let mut handler = usb_interface.lock().unwrap();
+    let touchpad_handler = handler
+        .as_any()
+        .downcast_mut::<UsbHidTouchpadHandler>()
+        .unwrap();
+    for touch in payload.touches {
+        if let Some(&idx) = touchpad_handler.map.get(&touch.identifier) {
+            let _ = touchpad_handler.slot[idx].take();
+        }
+        touchpad_handler.map.remove(&touch.identifier);
+    }
+    StatusCode::OK
+}
+
+#[axum::debug_handler]
+async fn touch_cancel(
+    State(usb_interface): State<UsbInterface>,
+    extract::Json(payload): extract::Json<Payload>,
+) -> StatusCode {
+    let mut handler = usb_interface.lock().unwrap();
+    let touchpad_handler = handler
+        .as_any()
+        .downcast_mut::<UsbHidTouchpadHandler>()
+        .unwrap();
+    for touch in payload.touches {
+        if let Some(&idx) = touchpad_handler.map.get(&touch.identifier) {
+            let _ = touchpad_handler.slot[idx].take();
+        }
+        touchpad_handler.map.remove(&touch.identifier);
+    }
     StatusCode::OK
 }
